@@ -1,0 +1,434 @@
+<!DOCTYPE html><html lang="ja">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>ロックマン風2Dアクション v1</title>
+  <style>
+    html, body { height: 100%; margin: 0; background:#0b0f1a; }
+    #wrap { display:flex; flex-direction:column; gap:8px; padding:12px; color:#e6edf3; font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, "Helvetica Neue", Arial, "Noto Sans JP", "Apple Color Emoji", "Segoe UI Emoji"; }
+    .hud { display:flex; align-items:center; justify-content:space-between; }
+    .hud .left { display:flex; gap:12px; align-items:center; }
+    .pill { background:#111827; border:1px solid #263043; border-radius:999px; padding:6px 10px; font-size:14px; }
+    canvas { width: 100%; max-width: 960px; aspect-ratio: 16/9; border-radius:16px; box-shadow: 0 10px 30px rgba(0,0,0,.4); border:1px solid #24324a; background: linear-gradient(#0a0e19, #0d1524); }
+    details { max-width: 960px; }
+    summary { cursor:pointer; }
+    <style>
+    html, body { height: 100%; margin: 0; background:#0b0f1a; }
+    #wrap { display:flex; flex-direction:column; gap:8px; padding:12px; color:#e6edf3; font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, "Helvetica Neue", Arial, "Noto Sans JP", "Apple Color Emoji", "Segoe UI Emoji"; }
+    .hud { display:flex; align-items:center; justify-content:space-between; }
+    .hud .left { display:flex; gap:12px; align-items:center; }
+    .pill { background:#111827; border:1px solid #263043; border-radius:999px; padding:6px 10px; font-size:14px; }
+    canvas { width: 100%; max-width: 960px; aspect-ratio: 16/9; border-radius:16px; box-shadow: 0 10px 30px rgba(0,0,0,.4); border:1px solid #24324a; background: linear-gradient(#0a0e19, #0d1524); }
+    details { max-width: 960px; }
+    summary { cursor:pointer; }
+    /* === モバイル用オンスクリーン操作 === */
+    .mobile-controls { display:none; max-width:960px; width:100%; margin-top:8px; user-select:none; }
+    .mobile-controls .row { display:flex; gap:12px; }
+    .pad { flex:1; display:flex; gap:12px; }
+    .btn { flex:1; background:#0f172a; border:1px solid #23314d; color:#cbd5e1; padding:16px; border-radius:16px; text-align:center; font-weight:600; box-shadow:0 6px 18px rgba(0,0,0,.25); }
+    .btn:active { transform: scale(0.98); }
+    @media (hover:none) and (pointer:coarse){ .mobile-controls{ display:block; } }
+  </style>
+</head>
+<body>
+  <div id="wrap">
+    <div class="hud">
+      <div class="left">
+        <div class="pill">▶︎ 矢印キー / A,D : 移動</div>
+        <div class="pill">スペース / K : ジャンプ</div>
+        <div class="pill">J : ショット</div>
+        <div class="pill">R : リスタート</div>
+      </div>
+      <div class="pill" id="status">準備中…</div>
+    </div>
+    <canvas id="game" width="960" height="540"></canvas>
+    <div class="mobile-controls" id="controls">
+      <div class="row">
+        <div class="pad">
+          <div class="btn" data-key="ArrowLeft">← 左</div>
+          <div class="btn" data-key="ArrowRight">→ 右</div>
+        </div>
+        <div class="pad">
+          <div class="btn" data-key="j">ショット</div>
+          <div class="btn" data-key=" ">ジャンプ</div>
+          <div class="btn" data-key="r">リスタート</div>
+        </div>
+      </div>
+    </div>
+    <details>
+      <summary>開発メモ（編集ポイント）</summary>
+      <ul>
+        <li>【TODO】スプライト画像差し替え（今はカラー矩形）。</li>
+        <li>【TODO】ステージ拡張は <code>level.tiles</code> と <code>level.platforms</code> を増やす。</li>
+        <li>【NOTE】プレイヤーの加速度・摩擦は <code>player</code> 内のパラメータを調整。</li>
+        <li>【NOTE】敵AIの巡回は <code>Enemy</code> の <code>minX</code>/<code>maxX</code>。</li>
+      </ul>
+    </details>
+  </div>  <script>
+    // ===== 基本ユーティリティ =====
+    const clamp = (v, min, max) => Math.max(min, Math.min(max, v));
+    const lerp = (a, b, t) => a + (b - a) * t;
+
+    // ===== 入力 =====
+    const keys = new Set();
+    const addKey = (k)=>keys.add(k.toLowerCase());
+    const delKey = (k)=>keys.delete(k.toLowerCase());
+    window.addEventListener('keydown', (e) => { addKey(e.key); if ([" ", "ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight"].includes(e.key)) e.preventDefault(); }, {passive:false});
+    window.addEventListener('keyup', (e) => { delKey(e.key); }, {passive:false});
+
+    // タッチ（オンスクリーン）
+    function bindTouchControls(){
+      const controls = document.getElementById('controls');
+      if(!controls) return;
+      controls.querySelectorAll('.btn').forEach(btn=>{
+        const k = btn.getAttribute('data-key');
+        const start = (ev)=>{ ev.preventDefault(); addKey(k); };
+        const end = (ev)=>{ ev.preventDefault(); delKey(k); };
+        btn.addEventListener('touchstart', start, {passive:false});
+        btn.addEventListener('touchend', end, {passive:false});
+        btn.addEventListener('touchcancel', end, {passive:false});
+        btn.addEventListener('mousedown', start);
+        btn.addEventListener('mouseup', end);
+        btn.addEventListener('mouseleave', end);
+      });
+    }
+
+    // ===== ゲーム定数 =====
+    const GRAVITY = 1800; // px/s^2
+    const JUMP_VELOCITY = 720; // 初速
+    const MOVE_ACCEL = 2600;
+    const MOVE_MAX = 300;
+    const GROUND_FRICTION = 0.86;
+    const AIR_FRICTION = 0.96;
+    const SHOT_COOLDOWN = 0.18; // 秒
+    const BULLET_SPEED = 540;
+
+    // ===== キャンバス & カメラ =====
+    const canvas = document.getElementById('game');
+    const ctx = canvas.getContext('2d');
+    const screen = { w: canvas.width, h: canvas.height };
+    const camera = { x: 0, y: 0 };
+
+    // ===== レベルデータ（簡易） =====
+    const level = {
+      width: 4000,
+      height: 1200,
+      spawn: { x: 120, y: 300 },
+      goal: { x: 3700, y: 420, w: 40, h: 80 },
+      platforms: [
+        // ground segments
+        { x: 0, y: 520, w: 1200, h: 40 },
+        { x: 1300, y: 520, w: 800, h: 40 },
+        { x: 2200, y: 520, w: 700, h: 40 },
+        { x: 3000, y: 520, w: 1000, h: 40 },
+        // floating
+        { x: 600, y: 420, w: 160, h: 20 },
+        { x: 820, y: 340, w: 180, h: 20 },
+        { x: 1100, y: 380, w: 160, h: 20 },
+        { x: 1680, y: 440, w: 220, h: 20 },
+        { x: 1900, y: 360, w: 160, h: 20 },
+        { x: 2400, y: 420, w: 220, h: 20 },
+        { x: 2650, y: 340, w: 160, h: 20 },
+        { x: 3300, y: 440, w: 180, h: 20 },
+      ],
+      enemies: [
+        { x: 760, y: 300, minX: 720, maxX: 980 },
+        { x: 1750, y: 300, minX: 1680, maxX: 1960 },
+        { x: 2460, y: 300, minX: 2400, maxX: 2680 },
+        { x: 3340, y: 300, minX: 3280, maxX: 3560 },
+      ]
+    };
+
+    // ===== 判定ヘルパー =====
+    function aabb(a, b) { return a.x < b.x + b.w && a.x + a.w > b.x && a.y < b.y + b.h && a.y + a.h > b.y; }
+
+    // ===== エンティティ =====
+    class Bullet {
+      constructor(x, y, dir) {
+        this.x = x; this.y = y; this.w = 10; this.h = 6;
+        this.vx = BULLET_SPEED * dir; this.vy = 0; this.dead = false;
+        this.life = 1.2; // 秒
+      }
+      update(dt) {
+        this.x += this.vx * dt; this.y += this.vy * dt; this.life -= dt;
+        if (this.life <= 0 || this.x < 0 || this.x > level.width) this.dead = true;
+      }
+      draw(gx, gy) {
+        ctx.fillStyle = '#67e8f9';
+        ctx.fillRect(Math.floor(this.x - gx), Math.floor(this.y - gy), this.w, this.h);
+      }
+    }
+
+    class Enemy {
+      constructor(x, y, minX, maxX) {
+        this.x = x; this.y = y; this.w = 32; this.h = 32;
+        this.vx = 80; this.vy = 0; this.hp = 2;
+        this.minX = minX; this.maxX = maxX; this.onGround = false;
+      }
+      rect() { return { x: this.x, y: this.y, w: this.w, h: this.h }; }
+      update(dt) {
+        // AI: 左右巡回
+        if (this.x < this.minX) this.vx = Math.abs(this.vx);
+        if (this.x + this.w > this.maxX) this.vx = -Math.abs(this.vx);
+
+        this.vy += GRAVITY * dt;
+        this.x += this.vx * dt;
+        this.y += this.vy * dt;
+
+        // 地形衝突（簡易）
+        this.onGround = false;
+        for (const p of level.platforms) {
+          const r = { x: this.x, y: this.y, w: this.w, h: this.h };
+          if (aabb(r, p)) {
+            const prevY = this.y - this.vy * dt;
+            const wasAbove = prevY + this.h <= p.y;
+            if (wasAbove) { // 着地
+              this.y = p.y - this.h; this.vy = 0; this.onGround = true;
+            } else {
+              // 横衝突
+              if (this.x + this.w/2 < p.x + p.w/2) {
+                this.x = p.x - this.w - 0.1; this.vx = -Math.abs(this.vx);
+              } else {
+                this.x = p.x + p.w + 0.1; this.vx = Math.abs(this.vx);
+              }
+            }
+          }
+        }
+      }
+      hit() { this.hp -= 1; }
+      get dead() { return this.hp <= 0; }
+      draw(gx, gy) {
+        // コア（ウイルス風）
+        ctx.fillStyle = '#fb7185';
+        ctx.fillRect(Math.floor(this.x - gx), Math.floor(this.y - gy), this.w, this.h);
+        // 輪郭
+        ctx.strokeStyle = '#fecaca';
+        ctx.strokeRect(Math.floor(this.x - gx)+0.5, Math.floor(this.y - gy)+0.5, this.w, this.h);
+      }
+    }
+
+    const player = {
+      x: level.spawn.x, y: level.spawn.y, w: 28, h: 36,
+      vx: 0, vy: 0, dir: 1, grounded: false, canDouble: false,
+      hp: 6, hpMax: 6, cooldown: 0,
+    };
+
+    let bullets = [];
+    let enemies = level.enemies.map(e => new Enemy(e.x, e.y, e.minX, e.maxX));
+    let time = 0; let gameOver = false; let clearFlag = false;
+
+    function reset() {
+      player.x = level.spawn.x; player.y = level.spawn.y;
+      player.vx = 0; player.vy = 0; player.dir = 1; player.grounded = false; player.canDouble = false;
+      player.hp = player.hpMax; bullets = []; time = 0; gameOver = false; clearFlag = false;
+      enemies = level.enemies.map(e => new Enemy(e.x, e.y, e.minX, e.maxX));
+    }
+
+    function handleInput(dt) {
+      if (gameOver || clearFlag) return;
+      let ax = 0;
+      const left = keys.has('arrowleft') || keys.has('a');
+      const right = keys.has('arrowright') || keys.has('d');
+      const jump = keys.has(' ') || keys.has('k');
+      const fire = keys.has('j');
+
+      if (left) { ax -= MOVE_ACCEL; player.dir = -1; }
+      if (right) { ax += MOVE_ACCEL; player.dir = 1; }
+
+      player.vx += ax * dt;
+      player.vx = clamp(player.vx, -MOVE_MAX, MOVE_MAX);
+
+      // 摩擦
+      const fr = player.grounded ? GROUND_FRICTION : AIR_FRICTION;
+      if (!left && !right) player.vx *= fr;
+
+      // ジャンプ（2段まで：地上+空中1回）
+      if (jump && !player._jumpHeld) {
+        if (player.grounded) {
+          player.vy = -JUMP_VELOCITY; player.grounded = false; player.canDouble = true;
+        } else if (player.canDouble) {
+          player.vy = -JUMP_VELOCITY * 0.9; player.canDouble = false;
+        }
+      }
+      player._jumpHeld = jump;
+
+      // ショット
+      player.cooldown -= dt;
+      if (fire && player.cooldown <= 0) {
+        bullets.push(new Bullet(player.x + player.w/2 + player.dir*16, player.y + player.h/2 - 4, player.dir));
+        player.cooldown = SHOT_COOLDOWN;
+      }
+    }
+
+    function physics(dt) {
+      if (gameOver || clearFlag) return;
+      // 重力
+      player.vy += GRAVITY * dt;
+
+      // 位置更新
+      player.x += player.vx * dt;
+      player.y += player.vy * dt;
+
+      // ワールド境界
+      player.x = clamp(player.x, 0, level.width - player.w);
+      if (player.y > level.height) {
+        player.hp = 0; gameOver = true;
+      }
+
+      // 地形衝突（X, Yを分離して簡易処理）
+      // X方向
+      for (const p of level.platforms) {
+        const r = { x: player.x, y: player.y, w: player.w, h: player.h };
+        if (aabb(r, p)) {
+          if (player.x + player.w/2 < p.x + p.w/2) player.x = p.x - player.w - 0.1; else player.x = p.x + p.w + 0.1;
+          player.vx = 0;
+        }
+      }
+      // Y方向
+      player.grounded = false;
+      for (const p of level.platforms) {
+        const r = { x: player.x, y: player.y, w: player.w, h: player.h };
+        if (aabb(r, p)) {
+          const prevY = player.y - player.vy * dt;
+          const wasAbove = prevY + player.h <= p.y;
+          if (wasAbove) { // 床に着地
+            player.y = p.y - player.h; player.vy = 0; player.grounded = true;
+          } else { // 天井ヒット
+            player.y = p.y + p.h + 0.1; player.vy = 0;
+          }
+        }
+      }
+
+      // 弾丸
+      for (const b of bullets) b.update(dt);
+      bullets = bullets.filter(b => !b.dead);
+
+      // 敵
+      for (const e of enemies) e.update(dt);
+
+      // 弾×敵 当たり
+      for (const b of bullets) {
+        for (const e of enemies) {
+          if (!e.dead && aabb({x:b.x, y:b.y, w:b.w, h:b.h}, e.rect())) {
+            b.dead = true; e.hit();
+          }
+        }
+      }
+      enemies = enemies.filter(e => !e.dead);
+
+      // 敵×プレイヤー
+      for (const e of enemies) {
+        if (aabb({x:player.x, y:player.y, w:player.w, h:player.h}, e.rect())) {
+          // ノックバック
+          const dir = (player.x + player.w/2) < (e.x + e.w/2) ? -1 : 1;
+          player.vx =  -dir * 280; player.vy = -360;
+          player.hp -= 1; if (player.hp <= 0) gameOver = true;
+        }
+      }
+
+      // ゴール
+      const goal = level.goal;
+      if (aabb({x:player.x, y:player.y, w:player.w, h:player.h}, {x:goal.x, y:goal.y, w:goal.w, h:goal.h})) {
+        clearFlag = true;
+      }
+    }
+
+    function drawBackground(gx, gy) {
+      // パララックス背景
+      const skyGrad = ctx.createLinearGradient(0, 0, 0, screen.h);
+      skyGrad.addColorStop(0, '#0a0e19');
+      skyGrad.addColorStop(1, '#0d1524');
+      ctx.fillStyle = skyGrad;
+      ctx.fillRect(0,0,screen.w,screen.h);
+
+      ctx.save();
+      const px = (camera.x * 0.3) % screen.w;
+      ctx.translate(-px, 0);
+      ctx.globalAlpha = 0.35;
+      for (let i = 0; i < 3; i++) {
+        ctx.fillStyle = '#1f2a44';
+        for (let m = 0; m < 8; m++) {
+          const x = i*screen.w + m*160 + 40;
+          const h = 80 + Math.sin((m+i)*1.3)*20;
+          ctx.fillRect(x, screen.h - 140 - h, 60, 140 + h);
+        }
+      }
+      ctx.restore();
+    }
+
+    function drawWorld(gx, gy) {
+      // プラットフォーム
+      for (const p of level.platforms) {
+        const x = Math.floor(p.x - gx), y = Math.floor(p.y - gy);
+        ctx.fillStyle = '#20314f';
+        ctx.fillRect(x, y, p.w, p.h);
+        ctx.strokeStyle = '#334b75';
+        ctx.strokeRect(x+0.5, y+0.5, p.w, p.h);
+      }
+
+      // ゴール（カプセル風）
+      const g = level.goal;
+      ctx.fillStyle = '#a78bfa';
+      ctx.fillRect(Math.floor(g.x - gx), Math.floor(g.y - gy), g.w, g.h);
+      ctx.strokeStyle = '#ddd6fe';
+      ctx.strokeRect(Math.floor(g.x - gx)+0.5, Math.floor(g.y - gy)+0.5, g.w, g.h);
+    }
+
+    function drawEntities(gx, gy) {
+      // プレイヤー（ロックマン風シルエット）
+      const px = Math.floor(player.x - gx), py = Math.floor(player.y - gy);
+      ctx.fillStyle = '#38bdf8';
+      ctx.fillRect(px, py, player.w, player.h);
+      // 顔向き
+      ctx.fillStyle = '#0ea5e9';
+      const eye = { x: px + (player.dir>0? player.w-8 : 4), y: py + 10, r: 3 };
+      ctx.fillRect(eye.x, eye.y, 3, 3);
+
+      // 敵
+      for (const e of enemies) e.draw(gx, gy);
+      // 弾
+      for (const b of bullets) b.draw(gx, gy);
+    }
+
+    function drawHUD() {
+      const s = document.getElementById('status');
+      if (clearFlag) s.textContent = 'CLEAR! おめでとう 🎉  Rで再スタート';
+      else if (gameOver) s.textContent = 'GAME OVER… Rで再スタート';
+      else s.textContent = 'HP: ' + '■'.repeat(player.hp) + '□'.repeat(player.hpMax - player.hp);
+    }
+
+    function updateCamera() {
+      const targetX = clamp(player.x + player.w/2 - screen.w/2, 0, level.width - screen.w);
+      const targetY = clamp(player.y + player.h/2 - screen.h/2, 0, level.height - screen.h);
+      camera.x = lerp(camera.x, targetX, 0.12);
+      camera.y = lerp(camera.y, targetY, 0.12);
+    }
+
+    // ===== ループ =====
+    let last = performance.now();
+    function loop(now) {
+      const dt = Math.min(0.033, (now - last) / 1000); // 最大30fps分のステップ
+      last = now;
+      time += dt;
+
+      if (keys.has('r')) reset();
+
+      handleInput(dt);
+      physics(dt);
+      updateCamera();
+
+      // 描画
+      ctx.clearRect(0,0,screen.w,screen.h);
+      drawBackground(camera.x, camera.y);
+      drawWorld(camera.x, camera.y);
+      drawEntities(camera.x, camera.y);
+      drawHUD();
+
+      requestAnimationFrame(loop);
+    }
+
+    reset();
+    bindTouchControls();
+    requestAnimationFrame(loop);
+  </script></body>
+</html>
