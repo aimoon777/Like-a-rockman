@@ -3,6 +3,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>ロックマン風2Dアクション v1</title>
+.mobile-controls.touch-force { display:block !important; }
   <style>
     html, body { height: 100%; margin: 0; background:#0b0f1a; }
     #wrap { display:flex; flex-direction:column; gap:8px; padding:12px; color:#e6edf3; font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, "Helvetica Neue", Arial, "Noto Sans JP", "Apple Color Emoji", "Segoe UI Emoji"; }
@@ -429,6 +430,13 @@
 
     reset();
     bindTouchControls();
+   <script>
+// 端末によってpointer判定がブレる対策：タッチなら強制的に表示
+if ('ontouchstart' in window) {
+  const c = document.getElementById('controls');
+  if (c) c.classList.add('touch-force');
+}
+</script> 
     requestAnimationFrame(loop);
   </script></body>
 </html>
